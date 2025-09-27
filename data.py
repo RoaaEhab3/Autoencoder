@@ -1,22 +1,21 @@
-
-import torch
 from torchvision import datasets, transforms
 
-transform = transforms.ToTensor()
+transform = transforms.Compose([
+    transforms.Resize((32, 32)),  # ensure dimensions divisible by 8
+    transforms.ToTensor()
+])
 
 def load_fashion_mnist():
-    # Training dataset
     train_data = datasets.FashionMNIST(
-        root="data",       
-        train=True,        
-        download=True,     
+        root="data",
+        train=True,
+        download=True,
         transform=transform
     )
 
-    # Test dataset
     test_data = datasets.FashionMNIST(
         root="data",
-        train=False,       
+        train=False,
         download=True,
         transform=transform
     )
