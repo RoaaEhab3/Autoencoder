@@ -1,15 +1,15 @@
+
 import torch
 from torchvision import datasets, transforms
 
 transform = transforms.ToTensor()
 
-def load_fashion_mnist(datasets):
-
+def load_fashion_mnist():
     # Training dataset
     train_data = datasets.FashionMNIST(
-        root="data",       # folder to save the dataset
-        train=True,        # True = training data
-        download=True,     # download if not already present
+        root="data",       
+        train=True,        
+        download=True,     
         transform=transform
     )
 
