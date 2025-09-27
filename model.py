@@ -15,7 +15,7 @@ class Sampling(nn.Module):
 # Encoder
 # -------------------------
 class Encoder(nn.Module):
-    def __init__(self, in_channels=1, embedding_dim=32):
+    def __init__(self, in_channels=1, latent_dim=32):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
@@ -23,12 +23,9 @@ class Encoder(nn.Module):
 
         # compute size after conv layers for flatten
         self.flatten = nn.Flatten()
-        self.embedding_dim = embedding_dim
+        self.latent_dim = latent_dim
 
-        # we will set shape dynamically later
-        self.z_mean = None
-        self.z_log_var = None
-
+        # lazy initialization
         self.fc_mu = None
         self.fc_logvar = None
         self.sampling = Sampling()
@@ -42,10 +39,10 @@ class Encoder(nn.Module):
         self.shape_before_flattening = x.shape[1:]  # (C, H, W)
         x = self.flatten(x)
 
-        if self.fc_mu is None:  # lazy init (for arbitrary input size)
+        if self.fc_mu is None:  # lazy init
             in_features = x.shape[1]
-            self.fc_mu = nn.Linear(in_features, self.embedding_dim)
-            self.fc_logvar = nn.Linear(in_features, self.embedding_dim)
+            self.fc_mu = nn.Linear(in_features, self.latent_dim)
+            self.fc_logvar = nn.Linear(in_features, self.latent_dim)
             self.fc_mu.to(x.device)
             self.fc_logvar.to(x.device)
 
@@ -58,10 +55,10 @@ class Encoder(nn.Module):
 # Decoder
 # -------------------------
 class Decoder(nn.Module):
-    def __init__(self, shape_before_flattening, embedding_dim=32):
+    def __init__(self, shape_before_flattening, latent_dim=32):
         super().__init__()
         C, H, W = shape_before_flattening
-        self.fc = nn.Linear(embedding_dim, C * H * W)
+        self.fc = nn.Linear(latent_dim, C * H * W)
         self.C, self.H, self.W = C, H, W
 
         self.deconv1 = nn.ConvTranspose2d(128, 128, kernel_size=3, stride=2, padding=1, output_padding=1)
@@ -83,13 +80,13 @@ class Decoder(nn.Module):
 # VAE Model
 # -------------------------
 class VAE(nn.Module):
-    def __init__(self, in_channels=1, embedding_dim=32, image_size=28):
+    def __init__(self, in_channels=1, latent_dim=32, image_size=28):
         super().__init__()
-        self.encoder = Encoder(in_channels, embedding_dim)
+        self.encoder = Encoder(in_channels, latent_dim)
         # dummy forward to initialize decoder correctly
         dummy = torch.zeros(1, in_channels, image_size, image_size)
-        _, _, z = self.encoder(dummy)
-        self.decoder = Decoder(self.encoder.shape_before_flattening, embedding_dim)
+        _, _, _ = self.encoder(dummy)
+        self.decoder = Decoder(self.encoder.shape_before_flattening, latent_dim)
 
     def forward(self, x):
         z_mean, z_log_var, z = self.encoder(x)
