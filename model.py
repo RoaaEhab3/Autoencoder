@@ -61,9 +61,6 @@ class Encoder(nn.Module):
         return x4, skips
 
 
-# -------------------------------
-# Decoder
-# -------------------------------
 class Decoder(nn.Module):
     def __init__(self, feature_dims=[512, 256, 128, 64], out_channels=1):
         super(Decoder, self).__init__()
@@ -96,25 +93,29 @@ class Decoder(nn.Module):
         self.final_conv = nn.Conv2d(feature_dims[3], out_channels, kernel_size=1)
 
     def forward(self, x, skips):
+        # Stage 1
         x = self.up1(x)
+        if x.shape[2:] != skips[0].shape[2:]:  # align sizes
+            x = nn.functional.interpolate(x, size=skips[0].shape[2:], mode="nearest")
         x = torch.cat([x, skips[0]], dim=1)
         x = self.conv1(x)
 
+        # Stage 2
         x = self.up2(x)
+        if x.shape[2:] != skips[1].shape[2:]:
+            x = nn.functional.interpolate(x, size=skips[1].shape[2:], mode="nearest")
         x = torch.cat([x, skips[1]], dim=1)
         x = self.conv2(x)
 
+        # Stage 3
         x = self.up3(x)
+        if x.shape[2:] != skips[2].shape[2:]:
+            x = nn.functional.interpolate(x, size=skips[2].shape[2:], mode="nearest")
         x = torch.cat([x, skips[2]], dim=1)
         x = self.conv3(x)
 
-        x = self.final_conv(x)
-        return x
+        return self.final_conv(x)
 
-
-# -------------------------------
-# AutoEncoder (Encoder + Decoder)
-# -------------------------------
 class AutoEncoder(nn.Module):
     def __init__(self, in_channels=1, feature_dims=[64, 128, 256, 512]):
         super(AutoEncoder, self).__init__()
