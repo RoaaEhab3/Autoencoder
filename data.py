@@ -21,7 +21,3 @@ def load_fashion_mnist(datasets):
         transform=transform
     )
     return train_data, test_data
-
-train_data, test_data = load_fashion_mnist(datasets)
-print(f"Number of training samples: {len(train_data)}")
-print(f"Number of test samples: {len(test_data)}")
