@@ -1,128 +1,105 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-# -------------------------------
+# -------------------------
+# Reparameterization trick
+# -------------------------
+class Sampling(nn.Module):
+    def forward(self, z_mean, z_log_var):
+        std = torch.exp(0.5 * z_log_var)
+        eps = torch.randn_like(std)
+        return z_mean + eps * std
+
+# -------------------------
 # Encoder
-# -------------------------------
+# -------------------------
 class Encoder(nn.Module):
-    def __init__(self, in_channels=1, feature_dims=[64, 128, 256, 512]):
-        """
-        Args:
-            in_channels: input channels (1 for grayscale FashionMNIST)
-            feature_dims: list of feature sizes for each stage
-        """
-        super(Encoder, self).__init__()
+    def __init__(self, in_channels=1, embedding_dim=32):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
 
-        # Stage 1
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(in_channels, feature_dims[0], kernel_size=3, padding=1),
-            nn.BatchNorm2d(feature_dims[0]),
-            nn.ReLU(inplace=True)
-        )
-        self.down1 = nn.Conv2d(feature_dims[0], feature_dims[0], kernel_size=3, stride=2, padding=1)
+        # compute size after conv layers for flatten
+        self.flatten = nn.Flatten()
+        self.embedding_dim = embedding_dim
 
-        # Stage 2
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(feature_dims[0], feature_dims[1], kernel_size=3, padding=1),
-            nn.BatchNorm2d(feature_dims[1]),
-            nn.ReLU(inplace=True)
-        )
-        self.down2 = nn.Conv2d(feature_dims[1], feature_dims[1], kernel_size=3, stride=2, padding=1)
+        # we will set shape dynamically later
+        self.z_mean = None
+        self.z_log_var = None
 
-        # Stage 3
-        self.conv3 = nn.Sequential(
-            nn.Conv2d(feature_dims[1], feature_dims[2], kernel_size=3, padding=1),
-            nn.BatchNorm2d(feature_dims[2]),
-            nn.ReLU(inplace=True)
-        )
-        self.down3 = nn.Conv2d(feature_dims[2], feature_dims[2], kernel_size=3, stride=2, padding=1)
-
-        # Bottleneck
-        self.bottleneck = nn.Sequential(
-            nn.Conv2d(feature_dims[2], feature_dims[3], kernel_size=3, padding=1),
-            nn.BatchNorm2d(feature_dims[3]),
-            nn.ReLU(inplace=True)
-        )
+        self.fc_mu = None
+        self.fc_logvar = None
+        self.sampling = Sampling()
 
     def forward(self, x):
-        x1 = self.conv1(x)
-        x = self.down1(x1)
+        x = F.relu(self.conv1(x))   # [B, 32, H/2, W/2]
+        x = F.relu(self.conv2(x))   # [B, 64, H/4, W/4]
+        x = F.relu(self.conv3(x))   # [B, 128, H/8, W/8]
 
-        x2 = self.conv2(x)
-        x = self.down2(x2)
+        # Save shape for decoder
+        self.shape_before_flattening = x.shape[1:]  # (C, H, W)
+        x = self.flatten(x)
 
-        x3 = self.conv3(x)
-        x = self.down3(x3)
+        if self.fc_mu is None:  # lazy init (for arbitrary input size)
+            in_features = x.shape[1]
+            self.fc_mu = nn.Linear(in_features, self.embedding_dim)
+            self.fc_logvar = nn.Linear(in_features, self.embedding_dim)
+            self.fc_mu.to(x.device)
+            self.fc_logvar.to(x.device)
 
-        x4 = self.bottleneck(x)
+        z_mean = self.fc_mu(x)
+        z_log_var = self.fc_logvar(x)
+        z = self.sampling(z_mean, z_log_var)
+        return z_mean, z_log_var, z
 
-        # skips from shallow → deep
-        skips = [x3, x2, x1]
-        return x4, skips
-
-
+# -------------------------
+# Decoder
+# -------------------------
 class Decoder(nn.Module):
-    def __init__(self, feature_dims=[512, 256, 128, 64], out_channels=1):
-        super(Decoder, self).__init__()
+    def __init__(self, shape_before_flattening, embedding_dim=32):
+        super().__init__()
+        C, H, W = shape_before_flattening
+        self.fc = nn.Linear(embedding_dim, C * H * W)
+        self.C, self.H, self.W = C, H, W
 
-        # Stage 1
-        self.up1 = nn.ConvTranspose2d(feature_dims[0], feature_dims[1], kernel_size=2, stride=2)
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(feature_dims[1]*2, feature_dims[1], kernel_size=3, padding=1),
-            nn.BatchNorm2d(feature_dims[1]),
-            nn.ReLU(inplace=True)
-        )
+        self.deconv1 = nn.ConvTranspose2d(128, 128, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.deconv2 = nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.deconv3 = nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.final = nn.Conv2d(32, 1, kernel_size=3, stride=1, padding=1)
 
-        # Stage 2
-        self.up2 = nn.ConvTranspose2d(feature_dims[1], feature_dims[2], kernel_size=2, stride=2)
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(feature_dims[2]*2, feature_dims[2], kernel_size=3, padding=1),
-            nn.BatchNorm2d(feature_dims[2]),
-            nn.ReLU(inplace=True)
-        )
+    def forward(self, z):
+        x = self.fc(z)
+        x = x.view(-1, self.C, self.H, self.W)
 
-        # Stage 3
-        self.up3 = nn.ConvTranspose2d(feature_dims[2], feature_dims[3], kernel_size=2, stride=2)
-        self.conv3 = nn.Sequential(
-            nn.Conv2d(feature_dims[3]*2, feature_dims[3], kernel_size=3, padding=1),
-            nn.BatchNorm2d(feature_dims[3]),
-            nn.ReLU(inplace=True)
-        )
+        x = F.relu(self.deconv1(x))
+        x = F.relu(self.deconv2(x))
+        x = F.relu(self.deconv3(x))
+        x = torch.sigmoid(self.final(x))
+        return x
 
-        # Final output
-        self.final_conv = nn.Conv2d(feature_dims[3], out_channels, kernel_size=1)
-
-    def forward(self, x, skips):
-        # Stage 1
-        x = self.up1(x)
-        if x.shape[2:] != skips[0].shape[2:]:  # align sizes
-            x = nn.functional.interpolate(x, size=skips[0].shape[2:], mode="nearest")
-        x = torch.cat([x, skips[0]], dim=1)
-        x = self.conv1(x)
-
-        # Stage 2
-        x = self.up2(x)
-        if x.shape[2:] != skips[1].shape[2:]:
-            x = nn.functional.interpolate(x, size=skips[1].shape[2:], mode="nearest")
-        x = torch.cat([x, skips[1]], dim=1)
-        x = self.conv2(x)
-
-        # Stage 3
-        x = self.up3(x)
-        if x.shape[2:] != skips[2].shape[2:]:
-            x = nn.functional.interpolate(x, size=skips[2].shape[2:], mode="nearest")
-        x = torch.cat([x, skips[2]], dim=1)
-        x = self.conv3(x)
-
-        return self.final_conv(x)
-
-class AutoEncoder(nn.Module):
-    def __init__(self, in_channels=1, feature_dims=[64, 128, 256, 512]):
-        super(AutoEncoder, self).__init__()
-        self.encoder = Encoder(in_channels=in_channels, feature_dims=feature_dims)
-        self.decoder = Decoder(feature_dims=list(reversed(feature_dims)), out_channels=in_channels)
+# -------------------------
+# VAE Model
+# -------------------------
+class VAE(nn.Module):
+    def __init__(self, in_channels=1, embedding_dim=32, image_size=28):
+        super().__init__()
+        self.encoder = Encoder(in_channels, embedding_dim)
+        # dummy forward to initialize decoder correctly
+        dummy = torch.zeros(1, in_channels, image_size, image_size)
+        _, _, z = self.encoder(dummy)
+        self.decoder = Decoder(self.encoder.shape_before_flattening, embedding_dim)
 
     def forward(self, x):
-        bottleneck, skips = self.encoder(x)
-        reconstructed = self.decoder(bottleneck, skips)
-        return reconstructed
+        z_mean, z_log_var, z = self.encoder(x)
+        reconstruction = self.decoder(z)
+        return z_mean, z_log_var, reconstruction
+
+    def loss_function(self, x, reconstruction, z_mean, z_log_var, beta=1.0):
+        # reconstruction loss
+        recon_loss = F.binary_cross_entropy(reconstruction, x, reduction="sum") / x.size(0)
+        # KL divergence
+        kl_loss = -0.5 * torch.mean(torch.sum(1 + z_log_var - z_mean.pow(2) - z_log_var.exp(), dim=1))
+        total_loss = recon_loss + beta * kl_loss
+        return total_loss, recon_loss, kl_loss
