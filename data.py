@@ -16,8 +16,12 @@ def load_fashion_mnist(datasets):
     # Test dataset
     test_data = datasets.FashionMNIST(
         root="data",
-        train=False,       # False = test data
+        train=False,       
         download=True,
         transform=transform
     )
     return train_data, test_data
+
+train_data, test_data = load_fashion_mnist(datasets)
+print(f"Number of training samples: {len(train_data)}")
+print(f"Number of test samples: {len(test_data)}")
